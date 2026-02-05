@@ -1,4 +1,4 @@
-name: GWS Manager Sync Automation
+﻿name: GWS Manager Sync Automation
 
 on:
   schedule:
@@ -29,4 +29,4 @@ jobs:
           GWS_MASTER_TOKEN_JSON: ${{ secrets.GWS_MASTER_TOKEN_JSON }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_TARGET_EMAIL: ${{ secrets.SLACK_TARGET_EMAIL }}
-        run: python cloud-sync-v3/sync_engine_cloud.py
+        run: python sync_engine_cloud.py
