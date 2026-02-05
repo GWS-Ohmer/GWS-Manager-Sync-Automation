@@ -1,0 +1,15 @@
+﻿# Security: Block all credentials
+*.json
+*.env
+.env*
+shared_auth.py
+master_project_token.json
+client_secret.json
+
+# Python
+__pycache__/
+.venv/
+*.py[cod]
+
+# OS
+.DS_Store
