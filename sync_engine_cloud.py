@@ -60,6 +60,37 @@ async def send_slack_dm(message):
         except Exception as e:
             print(f"DEBUG: Slack API Error: {e}")
 
+async def log_to_spreadsheet(sheets_service, added_list, removed_list, total):
+    """Logs the sync results to the 'Logs' tab of the spreadsheet."""
+    print("DEBUG: Attempting to update spreadsheet log in 'Logs' tab...")
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        added_count = len(added_list)
+        removed_count = len(removed_list)
+        added_str = ", ".join(added_list) if added_list else "None"
+        removed_str = ", ".join(removed_list) if removed_list else "None"
+        
+        values = [[
+            timestamp, 
+            "SYNC_V3_CLOUD", 
+            f"Added: {added_count}, Removed: {removed_count}", 
+            f"Total: {total}",
+            added_str,
+            removed_str
+        ]]
+        body = {'values': values}
+        safe_execute(sheets_service.spreadsheets().values().append(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Logs!A:F",
+            valueInputOption="USER_ENTERED",
+            body=body
+        ))
+        print("✅ Spreadsheet log updated successfully with email details.")
+        return True
+    except Exception as e:
+        print(f"⚠️ Warning: Could not update spreadsheet log: {e}")
+        return False
+
 async def run_sync():
     print("==========================================")
     print("☁️ STARTING GWS CLOUD SYNC ENGINE")
@@ -112,13 +143,13 @@ async def run_sync():
             pt = res.get('nextPageToken')
             if not pt: break
 
-        added = 0
-        removed = 0
+        added_emails = []
+        removed_emails = []
         for m_email in target_set:
             if m_email not in current_members_map:
                 try:
                     safe_execute(directory.members().insert(groupKey=TARGET_GROUP, body={'email': m_email, 'role': 'MEMBER'}))
-                    added += 1
+                    added_emails.append(m_email)
                 except: pass
 
         for m_email, role in current_members_map.items():
@@ -126,10 +157,21 @@ async def run_sync():
             if m_email not in target_set:
                 try:
                     safe_execute(directory.members().delete(groupKey=TARGET_GROUP, memberKey=m_email))
-                    removed += 1
+                    removed_emails.append(m_email)
                 except: pass
 
-        msg = f"✅ *GWS Manager Sync Complete*\n- Group: `{TARGET_GROUP}`\n- Added: {added}\n- Removed: {removed}"
+        final_count = len(target_set)
+        
+        # Log to Spreadsheet (Safe Call)
+        log_success = await log_to_spreadsheet(sheets, added_emails, removed_emails, final_count)
+        log_status = "✅ Logged" if log_success else "⚠️ Log Failed"
+
+        # Prepare Slack Message
+        slack_details = ""
+        if added_emails: slack_details += f"\n- *Added*: {', '.join(added_emails[:10])}{'...' if len(added_emails) > 10 else ''}"
+        if removed_emails: slack_details += f"\n- *Removed*: {', '.join(removed_emails[:10])}{'...' if len(removed_emails) > 10 else ''}"
+
+        msg = f"✅ *GWS Manager Sync Complete*\n- Group: `{TARGET_GROUP}`\n- Added: {len(added_emails)}\n- Removed: {len(removed_emails)}\n- Total Members: {final_count}\n- Sheet Status: {log_status}{slack_details}"
         await send_slack_dm(msg)
 
     except Exception as e:
