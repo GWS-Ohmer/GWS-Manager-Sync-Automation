@@ -1,31 +1,30 @@
-# ☁️ GWS Manager Sync: Cloud Deployment Guide
+# GWS Manager Sync Automation
 
-This folder contains the **Security-Hardened** version of the V3 Sync Engine, designed specifically for **GitHub Actions**.
+A scheduled GitHub Actions workflow that automatically syncs the HelloFresh USA Managers Google Group membership daily.
 
-## 🔐 SECURITY WARNING
-- **NEVER** commit `master_project_token.json` or any other `.json` token file to GitHub.
-- This version reads everything from **Environment Variables** (Memory) to prevent leaks.
+## How It Works
 
-## 🚀 Setup Instructions
+1. Scans the Google Workspace directory for active USA employees
+2. Identifies their managers
+3. Syncs the target Google Group to match verified active managers
+4. Sends a Slack DM summary on completion
 
-### 1. Upload to GitHub
-Upload the **contents** of this `cloud-sync-v3/` folder to your private GitHub repository.
-- Ensure the `.github/workflows/` path is preserved.
+## Schedule
 
-### 2. Configure GitHub Secrets
-Go to your GitHub Repository **Settings** -> **Secrets and variables** -> **Actions** and add these 3 Secrets:
+Runs daily at **1:00 AM UTC** (5:00 PM PST). Can also be triggered manually via the Actions tab.
 
-| Secret Name | Value |
-| :--- | :--- |
-| `GWS_MASTER_TOKEN_JSON` | Copy the **ENTIRE TEXT** from your `master_project_token.json` file. |
-| `SLACK_BOT_TOKEN` | Your `xoxb-...` token. |
-| `SLACK_TARGET_EMAIL` | `ohmer.sulit@helloconnect.org` |
+## Required GitHub Secrets
 
-### 3. Verify
-- The automation is scheduled for **5:00 PM PST daily**.
-- You can trigger it manually by going to the **Actions** tab in GitHub, selecting "GWS Manager Sync Automation," and clicking **"Run workflow"**.
+Configure these in **Settings → Secrets and variables → Actions**:
 
-## 🛡️ Protection Features
-- **No Disk Trace**: Credentials exist only in the runner's RAM.
-- **Auto-Retry**: Handles Google 503 errors automatically.
-- **Owner Immunity**: Detects and protects group owners dynamically.
+| Secret Name | Description |
+|---|---|
+| `GWS_MASTER_TOKEN_JSON` | Google Workspace OAuth token (JSON format) |
+| `SLACK_BOT_TOKEN` | Slack bot token (`xoxb-...`) |
+| `SLACK_TARGET_EMAIL` | Email address to send Slack DM notifications to |
+
+## Security
+
+- All credentials are injected at runtime via GitHub Secrets — nothing is stored on disk
+- No credential values are logged or printed
+- Token refresh happens in memory only
