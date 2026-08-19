@@ -1,4 +1,4 @@
-﻿import os
+import os
 import json
 import asyncio
 import httpx
@@ -10,27 +10,23 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.errors import HttpError
 
-# --- CLOUD CONFIGURATION ---
-SPREADSHEET_ID = '1Tazgsgl5vZ_IOn0k4QcUPAQa_SxmNjM53xfvdPzIZ64'
-TARGET_GROUP = 'mgrsofusaemployees@hellofresh.com'
+# --- CONFIGURATION (loaded from environment at runtime) ---
+SPREADSHEET_ID = os.getenv('SPREADSHEET_ID', '')
+TARGET_GROUP   = os.getenv('TARGET_GROUP', '')
+
 
 def get_creds():
-    print("DEBUG: Entering get_creds()...")
     creds_json = os.getenv('GWS_MASTER_TOKEN_JSON')
     if not creds_json:
-        print("DEBUG: ERROR - GWS_MASTER_TOKEN_JSON is empty or missing!")
-        raise ValueError("GWS_MASTER_TOKEN_JSON missing.")
-
-    print(f"DEBUG: Found JSON string (Length: {len(creds_json)})")
+        raise ValueError("GWS_MASTER_TOKEN_JSON is not set.")
     creds_data = json.loads(creds_json)
     creds = Credentials.from_authorized_user_info(creds_data)
-
     if creds.expired and creds.refresh_token:
-        print("DEBUG: Token expired, refreshing...")
+        print("INFO: Refreshing access token...")
         creds.refresh(Request())
-
-    print("DEBUG: Credentials successfully initialized.")
+    print("INFO: Credentials ready.")
     return creds
+
 
 def safe_execute(request, max_retries=5):
     for n in range(max_retries):
@@ -39,17 +35,18 @@ def safe_execute(request, max_retries=5):
         except HttpError as e:
             if e.resp.status in [500, 502, 503, 504]:
                 wait = (2 ** n) + (random.randint(0, 1000) / 1000)
-                print(f"DEBUG: Google {e.resp.status} error. Waiting {wait:.1f}s...")
+                print(f"INFO: Transient error ({e.resp.status}). Retrying in {wait:.1f}s...")
                 time.sleep(wait)
                 continue
             raise e
     return request.execute()
 
+
 async def send_slack_dm(message):
     token = os.getenv('SLACK_BOT_TOKEN')
     email = os.getenv('SLACK_TARGET_EMAIL')
-    print(f"DEBUG: Slack Setup - Token: {'YES' if token else 'NO'}, Email: {email}")
     if not token or not email:
+        print("INFO: Slack not configured, skipping notification.")
         return
     async with httpx.AsyncClient() as client:
         try:
@@ -65,24 +62,23 @@ async def send_slack_dm(message):
                     json={"channel": user_id, "text": message},
                     headers={"Authorization": f"Bearer {token}"}
                 )
-                print("DEBUG: Slack DM Sent.")
+                print("INFO: Slack notification sent.")
         except Exception as e:
-            print(f"DEBUG: Slack API Error: {e}")
+            print(f"WARN: Slack error: {type(e).__name__}")
+
 
 def log_to_spreadsheet(sheets_service, added_list, removed_list, total):
-    """Logs the sync results to the Logs tab. Returns (success, message)."""
-    print("DEBUG: Attempting to update spreadsheet log in 'Logs' tab...")
+    if not SPREADSHEET_ID:
+        return False, "⚠️ Sheet log skipped (SPREADSHEET_ID not set)"
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        added_str = ", ".join(added_list) if added_list else "None"
-        removed_str = ", ".join(removed_list) if removed_list else "None"
         values = [[
             timestamp,
             "SYNC_V4_CLOUD",
             f"Added: {len(added_list)}, Removed: {len(removed_list)}",
             f"Total: {total}",
-            added_str,
-            removed_str
+            ", ".join(added_list) if added_list else "None",
+            ", ".join(removed_list) if removed_list else "None"
         ]]
         safe_execute(sheets_service.spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID,
@@ -90,30 +86,34 @@ def log_to_spreadsheet(sheets_service, added_list, removed_list, total):
             valueInputOption="USER_ENTERED",
             body={'values': values}
         ))
-        print("✅ Spreadsheet log updated successfully.")
+        print("INFO: Spreadsheet log updated.")
         return True, "✅ Logged"
     except HttpError as e:
         if e.resp.status == 403:
-            print(f"⚠️ Sheets log skipped: token lacks spreadsheets scope (403). Sync still succeeded.")
+            print("WARN: Sheets log skipped — token lacks spreadsheets scope.")
             return False, "⚠️ Sheet log skipped (token scope)"
-        print(f"⚠️ Sheets log failed: {e}")
+        print(f"WARN: Sheets log failed ({e.resp.status})")
         return False, f"⚠️ Sheet log failed ({e.resp.status})"
     except Exception as e:
-        print(f"⚠️ Sheets log error: {e}")
+        print(f"WARN: Sheets log error: {type(e).__name__}")
         return False, "⚠️ Sheet log error"
+
 
 async def run_sync():
     print("==========================================")
-    print("☁️  STARTING GWS CLOUD SYNC ENGINE v4")
-    print("==========================================\n")
+    print("☁️  GWS CLOUD SYNC ENGINE v4")
+    print("==========================================")
+
+    if not TARGET_GROUP:
+        raise ValueError("TARGET_GROUP environment variable is not set.")
 
     try:
-        print("STEP 1: Initializing Credentials...")
-        creds = get_creds()
+        print("STEP 1: Initializing credentials...")
+        creds     = get_creds()
         directory = build('admin', 'directory_v1', credentials=creds)
-        sheets = build('sheets', 'v4', credentials=creds)
+        sheets    = build('sheets', 'v4', credentials=creds)
 
-        print("STEP 2: Scanning organization for USA Employees...")
+        print("STEP 2: Scanning for USA employees...")
         usa_employees = []
         page_token = None
         while True:
@@ -130,7 +130,7 @@ async def run_sync():
                 if org.get('Account_Type') != 'Employee':
                     continue
                 country = str(org.get('Country', ''))
-                subacc = str(org.get('SubAccount', ''))
+                subacc  = str(org.get('SubAccount', ''))
                 if country.lower() == "united states of america" or subacc.upper() == "USA":
                     m_email = next(
                         (r['value'].lower() for r in user.get('relations', []) if r['type'] == 'manager'),
@@ -147,7 +147,7 @@ async def run_sync():
             page_token = results.get('nextPageToken')
             if not page_token:
                 break
-        print(f"DEBUG: Found {len(usa_employees)} USA employees with managers.")
+        print(f"INFO: Found {len(usa_employees)} USA employees with managers.")
 
         print("STEP 3: Verifying active managers...")
         unique_mgr_emails = set(e[2] for e in usa_employees)
@@ -162,9 +162,9 @@ async def run_sync():
                     ])
             except Exception:
                 continue
-        print(f"DEBUG: {len(verified_managers)} managers verified as active.")
+        print(f"INFO: {len(verified_managers)} active managers verified.")
 
-        print("STEP 4: Updating Group...")
+        print("STEP 4: Syncing group membership...")
         target_set = {m[1].lower() for m in verified_managers}
 
         current_members_map = {}
@@ -204,12 +204,10 @@ async def run_sync():
                     pass
 
         final_count = len(target_set)
-        print(f"DEBUG: Group updated. Added: {len(added_emails)}, Removed: {len(removed_emails)}, Total: {final_count}")
+        print(f"INFO: Sync done. Added: {len(added_emails)}, Removed: {len(removed_emails)}, Total: {final_count}")
 
-        # Log to Spreadsheet (non-blocking — sync success regardless)
         log_ok, log_status = log_to_spreadsheet(sheets, added_emails, removed_emails, final_count)
 
-        # Build Slack summary
         change_lines = ""
         if added_emails:
             preview = ", ".join(added_emails[:5])
@@ -224,23 +222,22 @@ async def run_sync():
 
         msg = (
             f"✅ *GWS Manager Sync Complete*\n"
-            f"• Group: `{TARGET_GROUP}`\n"
-            f"• USA Employees scanned: {len(usa_employees)}\n"
-            f"• Active managers found: {len(verified_managers)}\n"
-            f"• Total group members: {final_count}\n"
+            f"• Employees scanned: {len(usa_employees)}\n"
+            f"• Active managers: {len(verified_managers)}\n"
+            f"• Group total: {final_count}\n"
             f"• Sheet: {log_status}"
             f"{change_lines}"
         )
         await send_slack_dm(msg)
 
     except Exception as e:
-        error_msg = f"❌ *CRITICAL CLOUD FAILURE*\nError: {str(e)}"
-        print(f"DEBUG: {error_msg}")
-        await send_slack_dm(error_msg)
+        print(f"ERROR: {type(e).__name__}: {str(e)}")
+        await send_slack_dm(f"❌ *GWS Manager Sync FAILED*\nError: `{type(e).__name__}`")
 
-    print("\n==========================================")
-    print("🏁 PROCESS FINISHED")
     print("==========================================")
+    print("🏁 FINISHED")
+    print("==========================================")
+
 
 if __name__ == "__main__":
     asyncio.run(run_sync())
